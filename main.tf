@@ -33,47 +33,59 @@ resource "aws_subnet" "public_subnet_1" {
 
 resource "aws_subnet" "public_subnet_2" {
   vpc_id            = aws_vpc.main.id
-  availability_zone = "ap-northeast-2c"
+  availability_zone = "ap-northeast-2b"
   cidr_block        = "10.0.1.0/24"
+  map_public_ip_on_launch = true
 
   tags = {
     Name = "public_subnet_2"
   }
 }
 
-resource "aws_subnet" "private_subnet_1" {
+resource "aws_subnet" "public_subnet_3" {
   vpc_id            = aws_vpc.main.id
   availability_zone = "ap-northeast-2c"
   cidr_block        = "10.0.2.0/24"
+  map_public_ip_on_launch = true
 
   tags = {
-    Name = "private_subnet_1"
+    Name = "public_subnet_3"
   }
 }
 
-resource "aws_route_table" "r" {
+
+################# router #######################
+
+resource "aws_route_table" "public_route_table" {
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.gw.id
-  }
-
   tags = {
-    Name = "main"
+    Name = "public_route_table"
   }
 }
+
+resource "aws_route" "public_route" {
+  route_table_id            = aws_route_table.public_route_table.id
+  destination_cidr_block    = "0.0.0.0/0"
+  gateway_id                 = aws_internet_gateway.gw.id
+  depends_on                = [aws_route_table.public_route_table]
+}
+
 
 resource "aws_route_table_association" "a" {
   subnet_id      = aws_subnet.public_subnet_1.id
-  route_table_id = aws_route_table.r.id
+  route_table_id = aws_route_table.public_route_table.id
 }
 
 resource "aws_route_table_association" "b" {
   subnet_id      = aws_subnet.public_subnet_2.id
-  route_table_id = aws_route_table.r.id
+  route_table_id = aws_route_table.public_route_table.id
 }
 
+resource "aws_route_table_association" "c" {
+  subnet_id      = aws_subnet.public_subnet_3.id
+  route_table_id = aws_route_table.public_route_table.id
+}
 
 
 resource "aws_iam_role" "test_role" {
@@ -96,6 +108,30 @@ resource "aws_iam_role" "test_role" {
 EOF
 }
 
+resource "aws_security_group" "allman" {
+  name        = "allman"
+  description = "allman"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "allman"
+  }
+}
+
 resource "aws_iam_role_policy_attachment" "test-attach" {
   role       = aws_iam_role.test_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
@@ -106,8 +142,7 @@ resource "aws_eks_cluster" "prod" {
   role_arn = aws_iam_role.test_role.arn
 
   vpc_config {
-    subnet_ids = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id, aws_subnet.private_subnet_1.id]
-    endpoint_private_access = true
+    subnet_ids = [aws_subnet.public_subnet_1.id, aws_subnet.public_subnet_2.id, aws_subnet.public_subnet_3.id]
   }
 
   # Ensure that IAM Role permissions are created before and deleted after EKS Cluster handling.
@@ -139,3 +174,25 @@ resource "aws_eks_cluster" "prod" {
 #     aws_iam_role_policy_attachment.test-attach,
 #   ]
 # }
+
+
+resource "aws_eks_node_group" "example" {
+  cluster_name    = aws_eks_cluster.prod.name
+  node_group_name = "standard-workers"
+  node_role_arn   = aws_iam_role.example.arn
+  subnet_ids      = aws_subnet.example[*].id
+
+  scaling_config {
+    desired_size = 1
+    max_size     = 1
+    min_size     = 1
+  }
+
+  # Ensure that IAM Role permissions are created before and deleted after EKS Node Group handling.
+  # Otherwise, EKS will not be able to properly delete EC2 Instances and Elastic Network Interfaces.
+  depends_on = [
+    aws_iam_role_policy_attachment.example-AmazonEKSWorkerNodePolicy,
+    aws_iam_role_policy_attachment.example-AmazonEKS_CNI_Policy,
+    aws_iam_role_policy_attachment.example-AmazonEC2ContainerRegistryReadOnly,
+  ]
+}
